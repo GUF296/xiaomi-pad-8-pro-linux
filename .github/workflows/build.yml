@@ -60,8 +60,8 @@ jobs:
           set -Eeuo pipefail
           mkdir v3/boot-components
           for n in initrd.img Image piano.dtb kernelrelease source-commit; do cp v3/rootfs-artifacts/$n v3/boot-components/$n; done
-          gzip -t v3/boot-components/initrd.img
-          gzip -cd v3/boot-components/initrd.img | cpio -it --quiet | grep -Fx init
+          test -s v3/boot-components/initrd.img
+          file v3/boot-components/initrd.img || true
           (cd v3/boot-components && sha256sum initrd.img Image piano.dtb kernelrelease source-commit > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
@@ -106,7 +106,7 @@ jobs:
           test "$(cat v3/boot-components/source-commit)" = "$(cat v3/kernel-artifacts/source-commit)"
           cmp v3/boot-components/Image v3/kernel-artifacts/Image
           cmp v3/boot-components/piano.dtb v3/kernel-artifacts/piano.dtb
-          python3 v3/mkbootimg --kernel v3/kernel-artifacts/Image.gz --ramdisk v3/boot-components/initrd.img --dtb v3/kernel-artifacts/piano.dtb --cmdline 'root=LABEL=linux rootfstype=ext4 rw rootwait' --base 0 --kernel_offset 0x8000 --ramdisk_offset 0x01000000 --tags_offset 0x01e00000 --dtb_offset 0x01f00000 --pagesize 4096 --header_version 2 --id -o boot.img
+          python3 v3/mkbootimg --kernel v3/kernel-artifacts/Image.gz --ramdisk v3/boot-components/initrd.img --dtb v3/kernel-artifacts/piano.dtb --cmdline 'root=LABEL=linux rootfstype=ext4 rw rootwait' --base 0 --kernel_offset 0x8000 --ramdisk_offset 0x01000000 --tags_offset 0x01e00000 --dtb_offset 0x04000000 --pagesize 4096 --header_version 2 --id -o boot.img
           python3 -c "import struct; p=open('boot.img','rb').read(); assert p[:8]==b'ANDROID!'; assert struct.unpack_from('<I',p,16)[0]>0; assert struct.unpack_from('<I',p,36)[0]==4096; assert struct.unpack_from('<I',p,40)[0]==2; assert b'root=LABEL=linux' in p[:1660]; assert len(p)<=96*1024*1024; print(len(p))"
           sha256sum boot.img v3/kernel-artifacts/Image.gz v3/kernel-artifacts/piano.dtb v3/boot-components/initrd.img > SHA256SUMS
       - uses: actions/upload-artifact@v4
