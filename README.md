@@ -4,9 +4,9 @@ This public repository builds Ubuntu 24.04 arm64 GNOME rootfs and Xiaomi Pad 8 P
 
 Current verified artifacts
 
-- Android boot v2 candidate: [workflow artifact](https://github.com/GUF296/xiaomi-pad-8-pro-linux/actions/runs/36773372124/artifacts/11126686116)
+- Android boot v2 candidate: [workflow artifact](https://github.com/GUF296/xiaomi-pad-8-pro-linux/actions/runs/36783396723/artifacts/11129235714)
 - Kernel, DTB and modules: [workflow artifact](https://github.com/GUF296/xiaomi-pad-8-pro-linux/actions/runs/36773372124/artifacts/11127065953)
-- GNOME rootfs, initramfs, Image and DTB: [workflow artifact](https://github.com/GUF296/xiaomi-pad-8-pro-linux/actions/runs/36780847204/artifacts/11127324973)
+- GNOME rootfs, initramfs, Image and DTB: [workflow artifact](https://github.com/GUF296/xiaomi-pad-8-pro-linux/actions/runs/36783396723/artifacts/11128905819)
 - Public generic firmware stage: [piano-firmware-stage.tar.xz](./piano-firmware-stage.tar.xz)
 
 The kernel is pinned to BigfootACA/linux commit 469998695964bc26493861cd11f8c17aa764f2e5. The piano configuration is merged as an additive fragment over arm64 defconfig. The rootfs uses signed Ubuntu debootstrap, GNOME Initial Setup, initramfs, LABEL=linux, and strict firmware manifest verification.
