@@ -13,8 +13,11 @@ jobs:
           git clone --depth=1 --branch full-v7.1.3 https://github.com/BigfootACA/linux.git linux
           make -C linux O=$PWD/out ARCH=arm64 LLVM=1 defconfig
           make -C linux O=$PWD/out ARCH=arm64 LLVM=1 olddefconfig
-          make -C linux O=$PWD/out ARCH=arm64 LLVM=1 -j$(nproc) Image.gz dtbs modules
+          make -C linux O=$PWD/out ARCH=arm64 LLVM=1 -j$(nproc) Image Image.gz dtbs modules
           make -C linux O=$PWD/out ARCH=arm64 LLVM=1 INSTALL_MOD_PATH=$PWD/mods modules_install
+          test -s out/arch/arm64/boot/Image
+          test -s out/arch/arm64/boot/Image.gz
+          cp out/arch/arm64/boot/Image .
           cp out/arch/arm64/boot/Image.gz .
           cp out/arch/arm64/boot/dts/qcom/sm8750-xiaomi-piano.dtb piano.dtb
       - name: rootfs
@@ -23,8 +26,22 @@ jobs:
           curl -fL https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64-root.tar.xz -o r.tar.xz
           sudo tar -xpf r.tar.xz -C r
           sudo cp -a mods/lib/modules r/usr/lib/
-          sudo cp piano.dtb r/boot/
-          sudo chroot r /bin/bash -c 'apt-get update && apt-get install -y gnome-shell gnome-session gnome-terminal gnome-control-center gnome-keyring nautilus gdm3 network-manager xdg-desktop-portal-gnome && apt-get clean'
+          sudo cp Image piano.dtb r/boot/
+          sudo rm -f r/etc/resolv.conf
+          sudo cp --dereference /etc/resolv.conf r/etc/resolv.conf
+          sudo mount --bind /dev r/dev
+          sudo mount --bind /dev/pts r/dev/pts
+          sudo mount -t proc proc r/proc
+          sudo mount -t sysfs sysfs r/sys
+          sudo chroot r /bin/bash -euxc 'apt-get update; apt-get install -y gnome-shell ubuntu-session gnome-terminal gnome-control-center gnome-keyring nautilus gdm3 network-manager xdg-desktop-portal-gnome pipewire-alsa; systemctl enable gdm3 NetworkManager || true; systemctl set-default graphical.target; apt-get clean'
+          sudo umount -lf r/sys r/proc r/dev/pts r/dev
+          sudo rm -f r/etc/resolv.conf
+          printf 'nameserver 1.1.1.1\n' | sudo tee r/etc/resolv.conf >/dev/null
+          printf 'PARTLABEL=linux / ext4 defaults 0 1\n' | sudo tee r/etc/fstab >/dev/null
+          sudo chroot r depmod -a || true
+          sudo test -e r/usr/lib/modules/*/modules.dep
+      - name: image
+        run: |
           truncate -s 12G rootfs.img
           sudo mkfs.ext4 -F -L linux -d r rootfs.img
           sudo e2fsck -fy rootfs.img
@@ -33,8 +50,8 @@ jobs:
           curl -fL https://raw.githubusercontent.com/code002-2/ubuntu-sheng/main/mkbootimg -o mkbootimg
           chmod +x mkbootimg
           cat Image.gz piano.dtb > Image.gz-dtb-piano
-          ./mkbootimg --kernel Image.gz-dtb-piano --cmdline 'root=PARTLABEL=linux rw' --pagesize 4096 --header_version 2 --id -o boot.img
-          sha256sum rootfs.img boot.img piano.dtb > SHA256SUMS
+          ./mkbootimg --kernel Image.gz-dtb-piano --cmdline 'root=LABEL=linux rw' --pagesize 4096 --header_version 2 --id -o boot.img
+          sha256sum rootfs.img boot.img piano.dtb Image > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: piano-ubuntu-gnome
@@ -42,4 +59,5 @@ jobs:
             rootfs.img
             boot.img
             piano.dtb
+            Image
             SHA256SUMS
