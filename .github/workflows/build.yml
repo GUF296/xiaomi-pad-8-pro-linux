@@ -1,4 +1,5 @@
 name: Build piano Ubuntu GNOME Android boot and rootfs
+
 on:
   workflow_dispatch:
     inputs:
@@ -19,12 +20,9 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
-      - name: Install kernel build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential bc bison flex clang lld llvm libssl-dev libelf-dev cpio kmod git tar gzip
-      - name: Extract validated build sources
-        run: mkdir v3 && tar -xzf repo-v3-new.tar.gz -C v3
-      - name: Build pinned piano kernel and DTB
-        run: bash v3/scripts/build-kernel.sh
+      - run: sudo apt-get update && sudo apt-get install -y build-essential bc bison flex clang lld llvm libssl-dev libelf-dev cpio kmod git tar gzip
+      - run: mkdir v3 && tar -xzf repo-v3-new.tar.gz -C v3
+      - run: bash v3/scripts/build-kernel.sh
       - uses: actions/upload-artifact@v4
         with:
           name: piano-kernel-7.1.3-469998695964
@@ -32,13 +30,13 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
-  boot:
+  rootfs:
     needs: kernel
+    if: ${{ always() && !cancelled() && (needs.kernel.result == 'success' || needs.kernel.result == 'skipped') }}
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
-      - name: Extract Android boot packer
-        run: mkdir v3 && tar -xzf repo-v3-new.tar.gz -C v3
+      - run: mkdir v3 && tar -xzf repo-v3-new.tar.gz -C v3
       - uses: actions/download-artifact@v4
         if: ${{ inputs.kernel_run_id == '' }}
         with:
@@ -51,10 +49,66 @@ jobs:
           path: v3/kernel-artifacts/
           run-id: ${{ inputs.kernel_run_id }}
           github-token: ${{ github.token }}
-      - name: Build Android boot v2 with separate piano DTB
+      - run: mkdir v3/piano-firmware-stage && tar -xJf piano-firmware-stage.tar.xz -C v3/piano-firmware-stage
+      - run: sudo apt-get update && sudo apt-get install -y debootstrap ubuntu-keyring ca-certificates e2fsprogs kmod zstd python3 tar gzip util-linux cpio
+      - env:
+          ROOTFS_SIZE: ${{ inputs.rootfs_size }}
+          FIRMWARE_STAGE: v3/piano-firmware-stage
+        run: sudo --preserve-env=ROOTFS_SIZE,FIRMWARE_STAGE bash v3/scripts/build-rootfs.sh
+      - name: Prepare Android boot components
         run: |
-          python3 v3/mkbootimg --kernel v3/kernel-artifacts/Image.gz --dtb v3/kernel-artifacts/piano.dtb --cmdline 'root=LABEL=linux rw rootwait' --base 0x00000000 --kernel_offset 0x00008000 --tags_offset 0x01e00000 --dtb_offset 0x01f00000 --pagesize 4096 --header_version 2 --id -o boot.img
-          sha256sum boot.img v3/kernel-artifacts/Image.gz v3/kernel-artifacts/piano.dtb > SHA256SUMS
+          set -Eeuo pipefail
+          mkdir v3/boot-components
+          for n in initrd.img Image piano.dtb kernelrelease source-commit; do cp v3/rootfs-artifacts/$n v3/boot-components/$n; done
+          gzip -t v3/boot-components/initrd.img
+          gzip -cd v3/boot-components/initrd.img | cpio -it --quiet | grep -Fx init
+          (cd v3/boot-components && sha256sum initrd.img Image piano.dtb kernelrelease source-commit > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: piano-android-boot-components
+          path: v3/boot-components/
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: piano-ubuntu-24.04-gnome-rootfs
+          path: v3/rootfs-artifacts/
+          if-no-files-found: error
+          retention-days: 30
+  boot:
+    needs: [kernel, rootfs]
+    if: ${{ always() && !cancelled() && needs.rootfs.result == 'success' && (needs.kernel.result == 'success' || needs.kernel.result == 'skipped') }}
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - run: mkdir v3 && tar -xzf repo-v3-new.tar.gz -C v3
+      - uses: actions/download-artifact@v4
+        if: ${{ inputs.kernel_run_id == '' }}
+        with:
+          name: piano-kernel-7.1.3-469998695964
+          path: v3/kernel-artifacts/
+      - uses: actions/download-artifact@v4
+        if: ${{ inputs.kernel_run_id != '' }}
+        with:
+          name: piano-kernel-7.1.3-469998695964
+          path: v3/kernel-artifacts/
+          run-id: ${{ inputs.kernel_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: piano-android-boot-components
+          path: v3/boot-components/
+      - name: Validate and package Android boot v2 with initramfs
+        run: |
+          set -Eeuo pipefail
+          (cd v3/boot-components && sha256sum --strict -c SHA256SUMS)
+          test "$(cat v3/boot-components/kernelrelease)" = "$(cat v3/kernel-artifacts/kernelrelease)"
+          test "$(cat v3/boot-components/source-commit)" = "$(cat v3/kernel-artifacts/source-commit)"
+          cmp v3/boot-components/Image v3/kernel-artifacts/Image
+          cmp v3/boot-components/piano.dtb v3/kernel-artifacts/piano.dtb
+          python3 v3/mkbootimg --kernel v3/kernel-artifacts/Image.gz --ramdisk v3/boot-components/initrd.img --dtb v3/kernel-artifacts/piano.dtb --cmdline 'root=LABEL=linux rootfstype=ext4 rw rootwait' --base 0 --kernel_offset 0x8000 --ramdisk_offset 0x01000000 --tags_offset 0x01e00000 --dtb_offset 0x01f00000 --pagesize 4096 --header_version 2 --id -o boot.img
+          python3 -c "import struct; p=open('boot.img','rb').read(); assert p[:8]==b'ANDROID!'; assert struct.unpack_from('<I',p,16)[0]>0; assert struct.unpack_from('<I',p,36)[0]==4096; assert struct.unpack_from('<I',p,40)[0]==2; assert b'root=LABEL=linux' in p[:1660]; assert len(p)<=96*1024*1024; print(len(p))"
+          sha256sum boot.img v3/kernel-artifacts/Image.gz v3/kernel-artifacts/piano.dtb v3/boot-components/initrd.img > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: piano-android-boot-v2
@@ -62,40 +116,4 @@ jobs:
             boot.img
             SHA256SUMS
           if-no-files-found: error
-          retention-days: 30
-  rootfs:
-    needs: kernel
-    if: ${{ always() && (needs.kernel.result == 'success' || needs.kernel.result == 'skipped') }}
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
-      - name: Extract validated build sources
-        run: mkdir v3 && tar -xzf repo-v3-new.tar.gz -C v3
-      - uses: actions/download-artifact@v4
-        if: ${{ inputs.kernel_run_id == '' }}
-        with:
-          name: piano-kernel-7.1.3-469998695964
-          path: v3/kernel-artifacts/
-      - uses: actions/download-artifact@v4
-        if: ${{ inputs.kernel_run_id != '' }}
-        with:
-          name: piano-kernel-7.1.3-469998695964
-          path: v3/kernel-artifacts/
-          run-id: ${{ inputs.kernel_run_id }}
-          github-token: ${{ github.token }}
-      - name: Extract verified device firmware stage
-        run: mkdir v3/piano-firmware-stage && tar -xJf piano-firmware-stage.tar.xz -C v3/piano-firmware-stage
-      - name: Install rootfs tools
-        run: sudo apt-get update && sudo apt-get install -y debootstrap ubuntu-keyring ca-certificates e2fsprogs kmod zstd python3 tar gzip util-linux
-      - name: Build authenticated GNOME rootfs and initramfs
-        env:
-          ROOTFS_SIZE: ${{ inputs.rootfs_size }}
-          FIRMWARE_STAGE: v3/piano-firmware-stage
-        run: sudo --preserve-env=ROOTFS_SIZE,FIRMWARE_STAGE bash v3/scripts/build-rootfs.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: piano-ubuntu-24.04-gnome-rootfs
-          path: v3/rootfs-artifacts/
-          if-no-files-found: error
-          compression-level: 0
           retention-days: 30
