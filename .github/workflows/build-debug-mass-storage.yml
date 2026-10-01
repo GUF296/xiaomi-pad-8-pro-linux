@@ -59,6 +59,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cpio gzip kmod initramfs-tools-core python3
+      - name: Make bundled mkbootimg executable
+        run: chmod +x mkbootimg
       - name: Replace only the ramdisk with the UFS-LUN0 debug hook
         env:
           ANDROID_BOOT_DIR: ${{ github.workspace }}/debug-android
