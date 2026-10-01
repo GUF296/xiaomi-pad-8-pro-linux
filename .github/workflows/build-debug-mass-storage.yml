@@ -66,7 +66,7 @@ jobs:
           p = 'scripts/build-debug-mass-storage-v2.sh'
           s = open(p).read()
           s = s.replace('if [[ -x "$ROOT_DIR/mkbootimg" ]]; then', 'if [[ -f "$ROOT_DIR/mkbootimg" ]]; then')
-          s = re.sub(r'cmp -s .*?die "Android boot kernel does not match downloaded kernel artifact \$\(basename "\$KERNEL_PAYLOAD"\)"', 'cp "\$KERNEL_PAYLOAD" "\$OUTPUT_DIR/work/android/kernel"\nif [[ -s "\$KERNEL_DIR/piano.dtb" ]]; then cp "\$KERNEL_DIR/piano.dtb" "\$OUTPUT_DIR/work/android/dtb"; fi', s, count=1, flags=re.S)
+          s = re.sub(r'cmp -s .*?die "Android boot kernel does not match downloaded kernel artifact \$\(basename "\$KERNEL_PAYLOAD"\)"', 'cp "$KERNEL_PAYLOAD" "$OUTPUT_DIR/work/android/kernel"\nif [[ -s "$KERNEL_DIR/piano.dtb" ]]; then cp "$KERNEL_DIR/piano.dtb" "$OUTPUT_DIR/work/android/dtb"; fi', s, count=1, flags=re.S)
           open(p, 'w').write(s)
           PY
       - name: Make bundled mkbootimg executable
