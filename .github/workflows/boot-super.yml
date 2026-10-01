@@ -1,0 +1,53 @@
+name: Repack boot for physical super
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  boot:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: piano-android-boot-v2
+          run-id: 36784975954
+          github-token: ${{ github.token }}
+          path: original
+      - name: Change only the root cmdline in verified boot v2
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir output
+          python3 - <<'PY'
+          import hashlib, pathlib, struct
+          src = pathlib.Path('original/boot.img')
+          old = src.read_bytes()
+          sums = pathlib.Path('original/SHA256SUMS').read_text().splitlines()
+          expected = next(line.split()[0] for line in sums if line.split()[-1].lstrip('*') == 'boot.img')
+          assert hashlib.sha256(old).hexdigest() == expected
+          assert old[:8] == b'ANDROID!'
+          assert struct.unpack_from('<I', old, 40)[0] == 2
+          assert struct.unpack_from('<I', old, 36)[0] == 4096
+          assert old[64:576].split(b'\0')[0] == b'root=LABEL=linux rootfstype=ext4 rw rootwait'
+          assert not any(old[608:1632])
+          cmd = b'root=PARTLABEL=super rootfstype=ext4 rw rootwait'
+          new = bytearray(old)
+          new[64:576] = cmd.ljust(512, b'\0')
+          assert new[:64] == old[:64] and new[576:] == old[576:]
+          assert len(new) == len(old)
+          dst = pathlib.Path('output/boot-super.img')
+          dst.write_bytes(new)
+          digest = hashlib.sha256(new).hexdigest()
+          pathlib.Path('output/SHA256SUMS').write_text(digest + '  boot-super.img\n')
+          pathlib.Path('output/README.txt').write_text('Experimental piano boot. Source: run 36784975954. Only root cmdline changed to PARTLABEL=super. Kernel, DTB, initramfs, addresses and rootfs unchanged. Requires ext4 written directly to physical GPT partition named super. Destroys Android contents in super; userdata not targeted. Black screen cause is not confirmed.\n')
+          print('BOOT_SHA256=' + digest)
+          print('BOOT_BYTES=' + str(len(new)))
+          print('Only header cmdline bytes changed; all other bytes identical.')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: piano-boot-super-test
+          path: output/
+          if-no-files-found: error
+          retention-days: 30
