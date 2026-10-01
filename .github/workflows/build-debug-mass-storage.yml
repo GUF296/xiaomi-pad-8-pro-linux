@@ -66,7 +66,7 @@ jobs:
           SOURCE_RUN_ID: ${{ inputs.source_run_id }}
           MASS_STORAGE_RO: ${{ inputs.mass_storage_ro && '1' || '0' }}
         run: |
-          sudo --preserve-env=ANDROID_BOOT_DIR,KERNEL_DIR,SOURCE_RUN_ID,MASS_STORAGE_RO,HOME bash scripts/build-debug-mass-storage.sh
+          sudo --preserve-env=ANDROID_BOOT_DIR,KERNEL_DIR,SOURCE_RUN_ID,MASS_STORAGE_RO,HOME bash scripts/build-debug-mass-storage-v2.sh
       - name: Publish the complete Android debug boot image
         uses: actions/upload-artifact@v4
         with:
