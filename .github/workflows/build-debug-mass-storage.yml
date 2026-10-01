@@ -59,7 +59,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cpio gzip kmod initramfs-tools-core python3
-      - name: Patch builder for matching Linux kernel
+      - name: Patch builder for split initramfs layers
         run: |
           python3 - <<'PY'
           import re
@@ -67,6 +67,7 @@ jobs:
           s = open(p).read()
           s = s.replace('if [[ -x "$ROOT_DIR/mkbootimg" ]]; then', 'if [[ -f "$ROOT_DIR/mkbootimg" ]]; then')
           s = re.sub(r'cmp -s .*?die "Android boot kernel does not match downloaded kernel artifact \$\(basename "\$KERNEL_PAYLOAD"\)"', 'cp "$KERNEL_PAYLOAD" "$OUTPUT_DIR/work/android/kernel"\nif [[ -s "$KERNEL_DIR/piano.dtb" ]]; then cp "$KERNEL_DIR/piano.dtb" "$OUTPUT_DIR/work/android/dtb"; fi', s, count=1, flags=re.S)
+          s = s.replace('INITRD="$OUTPUT_DIR/work/initrd"', 'INITRD="$OUTPUT_DIR/work/initrd"\nfor layer in "$INITRD/early" "$INITRD/main"; do if [[ -d "$layer" ]]; then cp -a "$layer"/. "$INITRD"/; rm -rf "$layer"; fi; done')
           open(p, 'w').write(s)
           PY
       - name: Make bundled mkbootimg executable
