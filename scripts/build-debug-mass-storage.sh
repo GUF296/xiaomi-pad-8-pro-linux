@@ -11,6 +11,9 @@ MASS_STORAGE_RO="${MASS_STORAGE_RO:-0}"
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 [[ "$MASS_STORAGE_RO" == 0 || "$MASS_STORAGE_RO" == 1 ]] || die 'MASS_STORAGE_RO must be 0 or 1'
 [[ -d "$ANDROID_BOOT_DIR" && -d "$KERNEL_DIR" ]] || die 'ANDROID_BOOT_DIR and KERNEL_DIR are required'
+# actions/download-artifact preserves the artifact's internal directory. Run
+# 36816302734, for example, unpacked v3/boot-components and v3/kernel-artifacts.
+# Locate files recursively, then normalize KERNEL_DIR to the artifact root.
 mapfile -d "" -t BOOT_IMAGES < <(find "$ANDROID_BOOT_DIR" -type f -name "boot.img" -print0)
 if [[ ${#BOOT_IMAGES[@]} -eq 0 ]]; then
   mapfile -d "" -t BOOT_IMAGES < <(find "$ANDROID_BOOT_DIR" -type f -iname "*boot*.img" -print0)
@@ -20,10 +23,16 @@ if [[ ${#BOOT_IMAGES[@]} -eq 0 ]]; then
 fi
 [[ ${#BOOT_IMAGES[@]} -eq 1 ]] || die "expected exactly one Android boot image in artifact, found ${#BOOT_IMAGES[@]}"
 BOOT_IMAGE="${BOOT_IMAGES[0]}"
-for name in SHA256SUMS Image kernelrelease modules.tar.gz; do
-  [[ -s "$KERNEL_DIR/$name" ]] || die "missing kernel artifact: $name"
+BOOT_IMAGE_DIR="$(dirname "$BOOT_IMAGE")"
+mapfile -d "" -t KERNEL_RELEASES < <(find "$KERNEL_DIR" -type f -name kernelrelease -print0)
+[[ ${#KERNEL_RELEASES[@]} -eq 1 ]] || die "expected exactly one recursive kernelrelease, found ${#KERNEL_RELEASES[@]}"
+KERNEL_DIR="$(dirname "${KERNEL_RELEASES[0]}")"
+for name in Image kernelrelease modules.tar.gz SHA256SUMS; do
+  [[ -s "$KERNEL_DIR/$name" ]] || die "missing kernel artifact in $KERNEL_DIR: $name"
 done
-if [[ -s "$ANDROID_BOOT_DIR/SHA256SUMS" ]]; then
+if [[ -s "$BOOT_IMAGE_DIR/SHA256SUMS" ]]; then
+  (cd "$BOOT_IMAGE_DIR"; sha256sum --strict --check SHA256SUMS)
+elif [[ -s "$ANDROID_BOOT_DIR/SHA256SUMS" ]]; then
   (cd "$ANDROID_BOOT_DIR"; sha256sum --strict --check SHA256SUMS)
 fi
 (cd "$KERNEL_DIR"; sha256sum --strict --check SHA256SUMS)
