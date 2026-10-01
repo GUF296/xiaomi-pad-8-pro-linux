@@ -1,0 +1,99 @@
+#!/bin/sh
+# initramfs-tools init-premount hook for the optional piano UFS LUN0 gadget.
+# This hook deliberately never returns after the gadget is started: returning
+# would let initramfs mount root=PARTLABEL=super while the same LUN is exported.
+# The backing block device is /dev/sda only after the sysfs checks below prove
+# it is SCSI LUN 0 on a Qualcomm UFS host. Never infer this from its name.
+set -u
+
+PREREQ=""
+case "${1:-}" in
+  prereqs) printf '%s\n' "$PREREQ"; exit 0 ;;
+esac
+
+log() {
+  # /dev/kmsg is available in initramfs; keep a console fallback for tests.
+  if [ -w /dev/kmsg ]; then
+    printf '<6>piano-mass-storage: %s\n' "$*" >/dev/kmsg || true
+  else
+    printf 'piano-mass-storage: %s\n' "$*" >&2
+  fi
+}
+
+halt_initramfs() {
+  # Keep the ramdisk alive and avoid switch_root. Deliberately do not spawn a
+  # shell: an accidental `exit` must not resume normal root mounting.
+  log "$1; refusing to continue to root mount"
+  while :; do sleep 3600; done
+}
+
+# The policy is fixed when this standalone debug image is built. Never honor
+# an inherited command line that could resume mounting the ordinary root.
+RO=$(cat /etc/piano/mass-storage-ro 2>/dev/null || printf 0)
+case "$RO" in 0|1) ;; *) halt_initramfs "invalid mass-storage read-only policy" ;; esac
+
+# Give udev and the UFS host time to enumerate LUN0.  The UFS and USB host
+# controllers are built in in the intended kernel; modprobe is still used for
+# gadget/PHY modules when they are modular.
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  [ -b /dev/sda ] && break
+  if command -v udevadm >/dev/null 2>&1; then
+    udevadm settle --timeout=1 2>/dev/null || true
+  fi
+  sleep 1
+ done
+if [ ! -b /dev/sda ]; then
+  halt_initramfs "UFS LUN0 /dev/sda did not appear"
+fi
+
+# Verify the SCSI address ends in LUN 0 and that an ancestor is driven by
+# ufshcd/ufshcd-qcom. This protects against exporting an eMMC/USB disk that
+# happens to be assigned sda on a future board/DT revision.
+SYSFS_DEVICE=$(readlink -f /sys/class/block/sda/device 2>/dev/null || true)
+[ -n "$SYSFS_DEVICE" ] || halt_initramfs "cannot resolve /sys/class/block/sda/device"
+SCSI_ID=$(basename "$SYSFS_DEVICE")
+case "$SCSI_ID" in
+  *:0) ;;
+  *) halt_initramfs "sda is not SCSI LUN 0 (sysfs id=$SCSI_ID)" ;;
+esac
+IS_UFS=0
+NODE="$SYSFS_DEVICE"
+while [ "$NODE" != / ] && [ "$NODE" != . ]; do
+  DRIVER=$(basename "$(readlink "$NODE/driver" 2>/dev/null || true)")
+  case "$DRIVER" in ufshcd|ufshcd-qcom|ufshcd-pltfm) IS_UFS=1 ;; esac
+  [ -r "$NODE/proc_name" ] && grep -Eq '^ufshcd($|-)' "$NODE/proc_name" 2>/dev/null && IS_UFS=1
+  NODE=$(dirname "$NODE")
+done
+[ "$IS_UFS" = 1 ] || halt_initramfs "sda is not attached to ufshcd (sysfs=$SYSFS_DEVICE)"
+
+# Load board USB role/PHY pieces when they are modular. Built-ins do not need
+# loading; kmod reads modules.builtin from the matching artifact. A missing
+# optional module is tolerated, but absence of a UDC below is fatal.
+for module in phy_qcom_qmp phy_qcom_qmp_usb qcom_pmic_glink qcom_pmic_glink_altmode \
+              usb_role_switch dwc3 dwc3_qcom; do
+  modprobe "$module" 2>/dev/null || true
+done
+# UFS/USB host ordering can vary. A gadget cannot function before a UDC has
+# registered, even if modprobe would appear successful.
+UDC=""
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  for candidate in /sys/class/udc/*; do
+    [ -e "$candidate" ] || continue
+    UDC="$candidate"
+    break
+  done
+  [ -n "$UDC" ] && break
+  sleep 1
+done
+[ -n "$UDC" ] || halt_initramfs "no USB device controller registered; gadget cannot bind"
+
+# Legacy g_mass_storage binds to the available UDC and pulls libcomposite and
+# usb_f_mass_storage through module dependencies.
+if ! modprobe g_mass_storage file=/dev/sda ro="$RO" removable=1 stall=0 2>/tmp/piano-gms.err; then
+  log "g_mass_storage failed: $(cat /tmp/piano-gms.err 2>/dev/null || true)"
+  halt_initramfs "mass-storage gadget failed"
+fi
+# A bound UDC does not prove that a USB host has connected or enumerated yet.
+# Never claim host access solely from modprobe's exit code.
+log "g_mass_storage loaded for /dev/sda (UFS LUN0), ro=$RO; awaiting USB host enumeration"
+halt_initramfs "mass-storage gadget initialized"
